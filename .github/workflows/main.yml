@@ -1,8 +1,6 @@
 name: Docker Image Sync
 
 on:
-  schedule:
-    - cron: '0 */6 * * *'  # 每 6 小时同步一次
   workflow_dispatch:  # 允许手动触发
 
 jobs:
