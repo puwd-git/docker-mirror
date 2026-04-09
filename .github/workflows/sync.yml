@@ -2,7 +2,7 @@ name: Sync Docker Images
 
 on:
   repository_dispatch:
-    types: [sync-image, sync-all]  # 监听的事件类型
+    types: [sync-image, sync-all]
 
 jobs:
   sync:
@@ -37,6 +37,7 @@ jobs:
           # 遍历标签并同步
           IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
           for TAG in "${TAG_ARRAY[@]}"; do
+            echo "Syncing $SOURCE_IMAGE:$TAG to ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
             docker pull "$SOURCE_IMAGE:$TAG"
             docker tag "$SOURCE_IMAGE:$TAG" "ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
             docker push "ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
