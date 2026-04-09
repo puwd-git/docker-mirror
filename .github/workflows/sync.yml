@@ -1,29 +1,92 @@
-- name: Sync image
-  run: |
-    # 从事件负载中获取同步信息
-    SOURCE_IMAGE="${{ github.event.client_payload.source_image }}"
-    TARGET_IMAGE="${{ github.event.client_payload.target_image }}"
+name: Sync Docker Images
+
+on:
+  repository_dispatch:
+    types: [sync-image, sync-all]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
     
-    # 处理标签数组
-    if [[ "${{ github.event.client_payload.tags }}" == *"["* ]]; then
-      # 如果是数组格式，解析数组
-      TAGS_JSON='${{ toJson(github.event.client_payload.tags) }}'
-      TAGS=$(echo "$TAGS_JSON" | jq -r '.[]' | tr '\n' ',')
-    else
-      # 如果是字符串，直接使用
-      TAGS="${{ github.event.client_payload.tags }}"
-    fi
-    
-    # 移除末尾的逗号
-    TAGS=$(echo "$TAGS" | sed 's/,$//')
-    
-    # 遍历标签并同步
-    IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
-    for TAG in "${TAG_ARRAY[@]}"; do
-      if [ -n "$TAG" ]; then
-        echo "Syncing $SOURCE_IMAGE:$TAG to ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
-        docker pull "$SOURCE_IMAGE:$TAG"
-        docker tag "$SOURCE_IMAGE:$TAG" "ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
-        docker push "ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
-      fi
-    done
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Sync image
+        run: |
+          # 从事件负载中获取同步信息
+          SOURCE_IMAGE="${{ github.event.client_payload.source_image }}"
+          TARGET_IMAGE="${{ github.event.client_payload.target_image }}"
+          
+          # 处理标签数组
+          if [[ "${{ github.event.client_payload.tags }}" == *"["* ]]; then
+            # 如果是数组格式，解析数组
+            TAGS_JSON='${{ toJson(github.event.client_payload.tags) }}'
+            TAGS=$(echo "$TAGS_JSON" | jq -r '.[]' | tr '\n' ',')
+          else
+            # 如果是字符串，直接使用
+            TAGS="${{ github.event.client_payload.tags }}"
+          fi
+          
+          # 移除末尾的逗号
+          TAGS=$(echo "$TAGS" | sed 's/,$//')
+          
+          # 检查是否有标签
+          if [ -z "$TAGS" ]; then
+            echo "Error: No tags specified"
+            exit 1
+          fi
+          
+          # 遍历标签并同步
+          IFS=',' read -ra TAG_ARRAY <<< "$TAGS"
+          for TAG in "${TAG_ARRAY[@]}"; do
+            if [ -n "$TAG" ]; then
+              echo "Syncing $SOURCE_IMAGE:$TAG to ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
+              docker pull "$SOURCE_IMAGE:$TAG" || {
+                echo "Error: Failed to pull $SOURCE_IMAGE:$TAG"
+                continue
+              }
+              
+              docker tag "$SOURCE_IMAGE:$TAG" "ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG" || {
+                echo "Error: Failed to tag $SOURCE_IMAGE:$TAG"
+                continue
+              }
+              
+              docker push "ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG" || {
+                echo "Error: Failed to push ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
+                continue
+              }
+              
+              echo "Successfully synced $SOURCE_IMAGE:$TAG to ghcr.io/${{ github.repository_owner }}/$TARGET_IMAGE:$TAG"
+            fi
+          done
+
+      - name: Notify success
+        if: success()
+        run: |
+          echo "Image sync completed successfully"
+
+      - name: Notify failure
+        if: failure()
+        run: |
+          echo "Image sync failed"
+          exit 1
